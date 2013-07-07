@@ -1,0 +1,14 @@
+production:
+  general:
+    daemonize: true
+
+    children: 10
+    max_requests: 200
+
+    debug_trace: /var/lib/smtp_proxy/debug
+
+  filters:
+    - gpg_encrypter
+
+  gpg_encrypter:
+    gnupg_home: /var/lib/smtp_proxy/keychain
