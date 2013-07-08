@@ -1,47 +1,30 @@
 require 'ostruct'
+require 'singleton'
 
 module SMTPProxy
 
-  module ProxyChild
-    extend self
-
-    def execute
-      # $server->accept(%opts);
-      # my $client = MSDW::SMTP::Client->new(interface => $dstaddr, port => $dstport);
-      # my $banner = $client->hear;
-      # $banner = "220 $debugtrace.$$" if defined $debugtrace;
-      # $server->ok($banner);
-      # while (my $what = $server->chat) {
-      #     if ($what eq '.') {
-      #         $client->yammer($server->{data});
-      #     } else {
-      #         $client->say($what);
-      #     }
-      #     $server->ok($client->hear);
-      # }
-      # $client = undef;
-      # delete $server->{"s"};
-      # exit 0 if $lives-- <= 0;
-
-      @listener.accept
-      @forwarder = Fowarder.new
-    end
-  end
-
   class Manager < ::Servolux::Server
-    def initialize(options = {})
-      @logger = ::Logger.new( $stderr )
+    include Singleton
 
+    attr_reader :listener
+
+    def self.method_missing(method, *args, &block)
+      return super unless instance.public_methods.include? method
+      instance.public_send(method, *args, &block)
+    end
+
+    def initialize(options = {})
       super(
-        self.class.name.split('::').last.downcase,
+        SMTPProxy::APP_NAME,
+        :pid_file => CommandLine.args.pid_file.to_s,
+        :logger   => SMTPProxy.logger,
         :interval => 2,
-        :logger   => @logger,
-        :pid_file => CommandLine.args.pid_file
       )
 
       @listener = Listener.new
+
       @pool = Servolux::Prefork.new(
-        :module      => ProxyChild,
+        :module      => Proxy,
         :timeout     => nil,
         :min_workers => SMTPProxy.option(:children),
         :max_workers => SMTPProxy.option(:children)
@@ -49,7 +32,7 @@ module SMTPProxy
     end
 
     def log( msg )
-      logger.info msg
+      SMTPProxy.logger.info msg
     end
 
     def log_pool_status

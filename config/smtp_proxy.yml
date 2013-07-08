@@ -7,7 +7,7 @@ production:
 
     debug_trace: /var/lib/smtp_proxy/debug
 
-  filters:
+  plugins:
     - gpg_encrypter
 
   gpg_encrypter:

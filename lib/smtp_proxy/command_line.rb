@@ -10,8 +10,6 @@ require 'tempfile'
 
 require 'smtp_proxy/core_ext/ostruct'
 
-require 'awesome_print'
-
 module SMTPProxy
   class CommandLine
     include Singleton
@@ -22,12 +20,19 @@ module SMTPProxy
     DEFAULT_OPTIONS = {
       :config_path  => Pathname.new('/etc/smtp_proxy'),
       :filter_path  => Pathname.new('/etc/smtp_proxy/filters'),
-      :pid_file     => Pathname.new('/var/run/smtp_proxy/smtp_proxy.pid'),
       :queue_path   => Dir.tmpdir,
+      :trace_path   => Pathname.new('/var/log/smtp_proxy/traces'),
+
+      :pid_file     => Pathname.new('/var/run/smtp_proxy/smtp_proxy.pid'),
+      :log_file     => Pathname.new('/var/log/smtp_proxy/smtp_proxy.log'),
+
+      :environment  => 'production',
+
       :children     => 16,
       :min_requests => 100,
       :max_requests => 200,
-      :debug_trace  => false,
+
+      :debug        => false,
       :foreground   => false
     }.freeze
 
@@ -91,22 +96,30 @@ module SMTPProxy
       queue_path_set  = false
       filter_path_set = false
 
-      @parser = OptionParser.new("Usage: #{APP_NAME} [options] <listen-address:port> <forward-address:port>") do |parser|
-        parser.separator 'General'
+      @parser = OptionParser.new("\nUsage: #{APP_NAME} [options] <listen-address:port> <forward-address:port>") do |parser|
+
+        parser.separator ''
         parser.separator 'Paths'
-        parser.on('-c PATH', '--config-path PATH', %Q(Configuration path. Default: #{@args.config_path})) {|v| config_path_set = true; @args.config_path = v }
-        parser.on('-f PATH', '--filter-path PATH', %Q(Plugin path. Default: #{@args.filter_path})) { |v| filter_path_set = true; @args.filter_path = v }
-        parser.on('-t PATH', '--queue-path PATH', %Q(Queue file path. Default: #{@args.queue_path})) { |v| queue_path_set = true; @args.queue_path = v }
-        parser.on('-p FILE', '--pid-file FILE', %Q(Path to pid file. Default: #{@args.pid_file})) { |v| @args.pid_file = v }
+        parser.on('-c PATH', '--config-path PATH', %Q(Configuration path. Default: #{@args.config_path})) {|v| config_path_set = true; @args.config_path = Pathname.new(v) }
+        parser.on('-f PATH', '--filter-path PATH', %Q(Plugin path. Default: #{@args.filter_path})) { |v| filter_path_set = true; @args.filter_path = Pathname.new(v) }
+        parser.on('-q PATH', '--queue-path PATH', %Q(Queue file path. Default: #{@args.queue_path})) { |v| queue_path_set = true; @args.queue_path = Pathname.new(v) }
+        parser.on('-t PATH', '--trace-path PATH', %Q(Debug trace files path. Default: #{@args.trace_path})) { |v| @args.trace_path = Pathname.new(v) }
+        parser.on('-p FILE', '--pid-file FILE', %Q(Path to pid file. Default: #{@args.pid_file})) { |v| @args.pid_file = Pathname.new(v) }
+        parser.on('-l FILE', '--log-file FILE', %Q(Path to log file. Default: #{@args.log_file})) { |v| @args.log_file = Pathname.new(v) }
+
+        parser.separator ''
         parser.separator 'Run Time'
-        parser.on('-e' ,'--environment ENV', %Q(Environment)) { |v| @args.environment = v }
-        parser.on('-F' ,'--foreground', %Q(Don't daemonize.)) { |v| @args.foreground = true }
+        parser.on('-e' ,'--environment ENV', %Q(Environment. Default: #{@args.environment})) { |v| @args.environment = v }
+        parser.on('-F' ,'--foreground', %Q(Don't daemonize. Default: daemonize.)) { |v| @args.foreground = true }
         parser.on('-C', '--children CHILDREN', %Q(Maximum children processes to run. Default: #{@args.children})) { |v| @args.children = Integer(v) }
         parser.on('-M', '--max-requests CHILDREN', %Q(Maximum requests to handle before restarting. Default: #{@args.max_requests})) { |v| @args.max_requests = Integer(v) }
         parser.on('-m', '--min-requests CHILDREN', %Q(Minimum requests to handle before restarting. Default: #{@args.min_requests})) { |v| @args.min_requests = Integer(v) }
-        parser.on('-d', '--debug-trace PATH', %Q(Path to debug log file. Default: #{@args.debug_trace.inspect})) { |v| @args.debug_trace = !!v }
-        parser.separator 'Misc'
+        parser.on('-d', '--debug', %Q(Turn debugging on. Default: #{@args.debug ? 'on' : 'off'})) { |v| @args.debug = !!v}
+
+        parser.separator ''
+        parser.separator 'General'
         parser.on('-h', '--help', 'This message') { puts parser.help; exit! 0 }
+
         parser.separator ''
         parser.parse!
 

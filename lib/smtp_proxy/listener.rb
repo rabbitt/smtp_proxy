@@ -1,65 +1,76 @@
 require 'thread'
 require 'socket'
 require 'tempfile'
+require 'state_machine'
 
 module SMTPProxy
-  class Message
-    attr_accessor :recipients, :rcpt_to, :data, :mail_from, :helo
-
-    def initialize()
-      @helo = nil
-      reset
-    end
-
-    def reset()
-      @recipients = []
-      @mail_from  = nil
-      @rcpt_to    = nil
-      @data       = nil
-    end
-
-    def rcpt_to=(recipient)
-      @recipients << (@to = recipient)
-    end
-
-    alias :to :rcpt_to
-    alias :to= :rcpt_to=
-    alias :from :mail_from
-    alias :from= :mail_from=
-  end
-
   class Listener
-    attr_reader :incoming
-
     TOKEN_HELO      = /^(?:helo|ehlo)\s+(.+)/i
     TOKEN_RSET      = /^rset\s*/i
     TOKEN_MAIL_FROM = /^mail\s+from:\s*(?:<([^>]+)>|(.+))/i
     TOKEN_RCPT_TO   = /^rcpt\s+to:\s*(?:<([^>]+)>|(.+))/i
     TOKEN_DATA      = /^data/i
 
-    def initialize()
-        @incoming = Queue.new
-        @server   = TCPServer.new(args.listener.address, args.listener.port)
-        @state    = 'bound'
-        @peer     = nil
-        @client   = nil
-        @debug    = $stderr
+    state_machine :initial => :waiting do
+      event(:greet) { transition :waiting => :helo }
+      event(:identify_sender) { transition :helo => :mail_from }
+      event(:identify_recipient) { transition :mail_from => :rcpt_to, :rcpt_to => same }
+      event(:send_data) { transition :rcpt_to => :data }
+      event(:done) { transition :data => :finished }
+      event(:reset) { transition any => :waiting }
+
+      before_transition all => any do |listener, transition|
+        Plugins.call_hooks(:before, transition.event, listener)
+      end
+
+      after_transition all => any do |listener, transition|
+        Plugins.call_hooks(:after, transition.event, listener)
+      end
     end
 
-    def args
-      SMTPProxy.args
+    state_machine :trace, :initial => :disabled, :namespace => 'trace' do
+      event(:enable) { transition all => :enabled }
+      event(:disable) { transition all => :disabled }
+      state :enabled,  :value => true
+      state :disabled, :value => false
     end
 
-    def accept
-      @client = @server.accept.tap { |client|
-        @peer = client.peeraddr
-        @state = 'accepted'
-      }
+    def initialize
+      @server = TCPServer.new(SMTPProxy.args.listener.address, SMTPProxy.args.listener.port)
+      @client = nil
+      @trace  = false
+      @state  = :waiting
+      @debug  = $stderr
     end
 
-    def get_message
-      message = Message.new
+    def proxy(endpoint)
+      begin
+        message    = Message.new
+        @client    = @server.accept
+        @forwarder = Forwarder.new
 
+        until finished?
+          unless data?
+            return fail unless (line = getline)
+            line = line.gsub(/\s+$/, '').gsub(/\s+/, ' ')
+            case line
+              when TOKEN_HELO then greet!(message, line)
+              when TOKEN_MAIL_FROM then identify_sender!(message, line)
+              when TOKEN_RCPT_TO then identify_recipient!(message, line)
+              when TOKEN_DATA then send_data!(message)
+              when TOKEN_RSET then reset!(message)
+            end
+          end
+          @forwarder.say greet!(message, line) if waiting?
+          @forwarder.say
+        end
+      ensure
+        @forwarder.close
+        @forwarder = nil
+      end
+    end
+
+    def chat
       while true
         if @state !~ /^data/i
           return 0 unless (line = getline)
@@ -67,6 +78,7 @@ module SMTPProxy
           @state = line
           case line
             when TOKEN_HELO then
+              greet!
               message.helo = $1.gsub(/\s+$/, '').gsub(/\s+/, ' ')
             when TOKEN_RSET then
               message.reset
